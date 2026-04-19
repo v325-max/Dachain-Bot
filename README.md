@@ -40,8 +40,9 @@ Automated daily activities for [DAC Inception](https://inception.dachain.io/acti
 ### 1. Prerequisites
 
 ```bash
-# Node.js >= 18
-node --version
+# clone repo
+git clone https://github.com/v325-max/Dachain-Bot.git
+cd Dachain-Bot
 
 # Install dependencies
 npm install
