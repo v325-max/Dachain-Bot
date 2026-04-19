@@ -44,7 +44,7 @@ Automated daily activities for [DAC Inception](https://inception.dachain.io/acti
 node --version
 
 # Install dependencies
-npm install ethers axios
+npm install
 ```
 
 ### 2. Wallet Keys
