@@ -8,7 +8,7 @@
  * Auto-activities:
  *   1. Faucet claim  (requires X or Discord linked)
  *   2. Daily crate   (QE reward)
- *   3. Self-transfer TX badges (tx_3, tx_5, tx_10, tx_25, tx_50)
+ *   3. TX badges — sends to address.txt list or random addresses
  *   4. Burn DAC â†’ QE (Quantum Energy)
  *   5. API sync
  *
@@ -30,10 +30,11 @@ const path      = require('path');
 //  CONFIG
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-const DIR       = __dirname;
-const PK_FILE   = path.join(DIR, 'pk.txt');
-const STATE_FILE= path.join(DIR, 'state.json');
-const LOG_FILE  = path.join(DIR, 'bot.log');
+const DIR         = __dirname;
+const PK_FILE     = path.join(DIR, 'pk.txt');
+const ADDRESS_FILE= path.join(DIR, 'address.txt');
+const STATE_FILE  = path.join(DIR, 'state.json');
+const LOG_FILE    = path.join(DIR, 'bot.log');
 
 const CFG = {
   rpc:        'https://rpctest.dachain.tech',
@@ -231,24 +232,59 @@ async function openCrate(api, addr, st, now) {
   }
 }
 
+// â”€â”€ address list (address.txt) or random fallback â”€â”€
+let _cachedAddrs = null;
+function loadAddresses() {
+  if (_cachedAddrs !== null) return _cachedAddrs;
+  if (!fs.existsSync(ADDRESS_FILE)) {
+    _cachedAddrs = []; // empty = use random addresses
+    return _cachedAddrs;
+  }
+  _cachedAddrs = fs.readFileSync(ADDRESS_FILE, 'utf8')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.startsWith('0x') && l.length === 42);
+  return _cachedAddrs;
+}
+
+function pickRecipient(addrs, selfAddr) {
+  if (addrs.length > 0) {
+    // pick random from list, skip if it's our own address
+    let target;
+    do { target = addrs[Math.floor(Math.random() * addrs.length)]; }
+    while (target.toLowerCase() === selfAddr.toLowerCase() && addrs.length > 1);
+    return target;
+  }
+  // generate random wallet address
+  return ethers.Wallet.createRandom().address;
+}
+
 async function sendTxs(signer, api, addr, st) {
   const provider = signer.provider;
   const bal      = await provider.getBalance(addr);
   const minWei   = ethers.parseEther('0.001');
 
   if (bal < minWei) {
-    log('warn', addr, `Low balance (${ethers.formatEther(bal)} DAC) â€” skip TX`);
+    log('warn', addr, `Low balance (${ethers.formatEther(bal)} DAC) — skip TX`);
     return;
+  }
+
+  const addrs = loadAddresses();
+  if (addrs.length > 0) {
+    log('info', addr, `TX mode: ${addrs.length} address(es) from address.txt`);
+  } else {
+    log('info', addr, 'TX mode: random addresses (no address.txt found)');
   }
 
   let sent = 0;
   for (let i = 0; i < TX_COUNT; i++) {
     try {
+      const to  = pickRecipient(addrs, addr);
       const amt = ethers.parseEther((0.0001 + Math.random() * 0.0001).toFixed(6));
-      const tx  = await signer.sendTransaction({ to: addr, value: amt });
+      const tx  = await signer.sendTransaction({ to, value: amt });
       st.txCount++;
       sent++;
-      log('ok', addr, `TX #${st.txCount} â€” ${tx.hash.slice(0, 16)}â€¦ (${ethers.formatEther(amt)} DAC)`);
+      log('ok', addr, `TX #${st.txCount} → ${tag(to)} — ${tx.hash.slice(0, 16)}… (${ethers.formatEther(amt)} DAC)`);
       await api.sync(tx.hash);
       await sleep(2000 + Math.random() * 3000);
     } catch (e) {
