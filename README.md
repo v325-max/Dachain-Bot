@@ -14,7 +14,7 @@ Automated daily activities for [DAC Inception](https://inception.dachain.io/acti
 |---|--------|-------------|
 | 1 | 🚰 Faucet | Claim free DACC (requires X or Discord linked) |
 | 2 | 📦 Crate | Open daily Quantum Crate → earn QE |
-| 3 | 💸 TX | Self-transfer transactions → earn TX badges |
+| 3 | 💸 TX | Transfer to `address.txt` list or random addresses |
 | 4 | 🔥 Burn | Burn DACC → Quantum Energy (QE) |
 | 5 | 🔄 Sync | Sync all activity to API |
 
@@ -64,7 +64,19 @@ echo "0xWALLET_3_KEY" >> pk.txt
 
 > ⚠️ Never share or commit `pk.txt`!
 
-### 3. Prerequisites per Wallet
+### 3. Address List (Optional)
+
+Create `address.txt` to send transactions to specific addresses. One address per line:
+
+```bash
+# Create address list
+echo "0xRECIPIENT_1_ADDRESS" > address.txt
+echo "0xRECIPIENT_2_ADDRESS" >> address.txt
+```
+
+> If `address.txt` doesn't exist, the bot will generate random addresses automatically.
+
+### 4. Prerequisites per Wallet
 
 Each wallet must have:
 - ✅ Connected at [inception.dachain.io](https://inception.dachain.io) at least once
@@ -92,7 +104,7 @@ node bot.js --cron
 
 ### Custom Options
 ```bash
-node bot.js --tx 5              # 5 self-transfers per cycle
+node bot.js --tx 5              # 5 transfers per cycle
 node bot.js --burn 0.01         # burn 0.01 DAC per cycle
 node bot.js --tx 10 --burn 0.02 # combine options
 ```
@@ -147,6 +159,7 @@ crontab -e
 |------|-------------|
 | `bot.js` | Main bot script |
 | `pk.txt` | Private keys (one per line) |
+| `address.txt` | Recipient addresses (one per line, optional) |
 | `state.json` | Runtime state (auto-generated) |
 | `bot.log` | Activity log (auto-generated) |
 | `package.json` | Project config |
@@ -161,10 +174,10 @@ crontab -e
 │  (wallets)  │     │  (ethers.js) │     │  (CSRF+cookie)  │
 └─────────────┘     └──────┬───────┘     └────────┬────────┘
                            │                       │
-                    ┌──────▼───────┐        ┌──────▼────────┐
-                    │  DAC Chain   │        │  Inception    │
-                    │  (RPC)       │        │  Dashboard    │
-                    └──────────────┘        └───────────────┘
+┌─────────────┐     ┌──────▼───────┐        ┌──────▼────────┐
+│ address.txt │────▶│  DAC Chain   │        │  Inception    │
+│ (recipients)│     │  (RPC)       │        │  Dashboard    │
+└─────────────┘     └──────────────┘        └───────────────┘
 ```
 
 **Auth flow:**
@@ -172,7 +185,7 @@ crontab -e
 2. `POST /api/auth/wallet/` → register/login wallet
 3. `POST /api/inception/faucet/` → claim DACC
 4. `POST /api/inception/crate/open/` → open daily crate
-5. `POST tx` → self-transfer on-chain
+5. `POST tx` → transfer to address.txt or random address
 6. `POST burnForQE()` → burn DACC on-chain
 7. `POST /api/inception/sync/` → sync activity
 
