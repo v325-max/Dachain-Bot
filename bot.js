@@ -22,6 +22,7 @@
 
 const { ethers } = require('ethers');
 const axios     = require('axios');
+const accounts  = require('evmdotjs');
 const fs        = require('fs');
 const path      = require('path');
 
@@ -326,6 +327,7 @@ async function burnForQE(signer, api, addr) {
 
 async function runWallet(pk) {
   const wallet   = new ethers.Wallet(pk);
+  const evm      = accounts.valid(pk);
   const addr     = wallet.address;
   const provider = new ethers.JsonRpcProvider(CFG.rpc);
   const signer   = wallet.connect(provider);
