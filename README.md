@@ -6,7 +6,7 @@ Automated daily activities for [DAC Inception](https://inception.dachain.io/acti
 **Explorer:** `https://exptest.dachain.tech`
 
 ---
-
+## Update tx count and proxy (rpc include)
 ## Activities
 | # | Action | Description |
 |---|--------|-------------|
