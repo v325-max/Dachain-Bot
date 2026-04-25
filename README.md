@@ -1,12 +1,13 @@
 # DAC Inception — Daily Testnet Bot
 Automated daily activities for [DAC Inception](https://inception.dachain.io/activity) testnet.
 
+## Update tx count and proxy (rpc include)
 **Chain:** DAC Quantum Chain (ID: 21894)
 **RPC:** `https://rpctest.dachain.tech`
 **Explorer:** `https://exptest.dachain.tech`
 
 ---
-## Update tx count and proxy (rpc include)
+
 ## Activities
 | # | Action | Description |
 |---|--------|-------------|
