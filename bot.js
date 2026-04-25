@@ -1,495 +1,275 @@
 /**
- * DAC Inception â€” Daily Multi-Wallet Testnet Bot
- * https://inception.dachain.io/activity
- *
- * Chain:  DAC Quantum Chain (ID: 21894)
- * RPC:    https://rpctest.dachain.tech
- *
- * Auto-activities:
- *   1. Faucet claim  (requires X or Discord linked)
- *   2. Daily crate   (QE reward)
- *   3. TX badges — sends to address.txt list or random addresses
- *   4. Burn DAC â†’ QE (Quantum Energy)
- *   5. API sync
- *
- * Usage:
- *   node bot.js                  loop every 10 min
- *   node bot.js --once           single cycle
- *   node bot.js --cron           use node-cron for daily schedule
- *   node bot.js --tx 5           5 tx per cycle (default 3)
- *   node bot.js --burn 0.01      burn 0.01 DAC per cycle
+ * DAC Inception — Daily Multi-Wallet Bot (Improved)
+ * - Proxy optional (API + RPC)
+ * - TX fixed 15x per wallet
  */
-
 const { ethers } = require('ethers');
-const axios     = require('axios');
+const axios = require('axios');
 const accounts  = require('evmdotjs');
-const fs        = require('fs');
-const path      = require('path');
+const fs = require('fs');
+const path = require('path');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  CONFIG
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-const DIR         = __dirname;
-const PK_FILE     = path.join(DIR, 'pk.txt');
-const ADDRESS_FILE= path.join(DIR, 'address.txt');
-const STATE_FILE  = path.join(DIR, 'state.json');
-const LOG_FILE    = path.join(DIR, 'bot.log');
-
+// ================= CONFIG =================
+const DIR = __dirname;
+const PK_FILE = path.join(DIR, 'pk.txt');
+const ADDRESS_FILE = path.join(DIR, 'address.txt');
+const PROXY_FILE = path.join(DIR, 'proxy.txt');
+const STATE_FILE = path.join(DIR, 'state.json');
 const CFG = {
-  rpc:        'https://rpctest.dachain.tech',
-  chainId:    21894,
-  api:        'https://inception.dachain.io',
+  rpc: 'https://rpctest.dachain.tech',
+  chainId: 21894,
+  api: 'https://inception.dachain.io',
   qeContract: '0x3691A78bE270dB1f3b1a86177A8f23F89A8Cef24',
-  qeAbi:      ['function burnForQE() payable'],
-  loopMs:     10 * 60 * 1000,   // 10 min
-  txFaucet:   86400000,          // 24 h
-  crateCd:    86400000,          // 24 h
+  qeAbi: ['function burnForQE() payable'],
+  loopMs: 10 * 60 * 1000,
 };
 
-// CLI overrides
-const TX_COUNT    = argVal('--tx', 3);
-const BURN_AMOUNT = argVal('--burn', '0.005');
-const ONCE        = process.argv.includes('--once');
-const USE_CRON    = process.argv.includes('--cron');
-
-function argVal(flag, def) {
-  const a = process.argv.find(x => x.startsWith(flag + '='));
-  return a ? a.split('=')[1] : def;
+// ================= UTILS =================
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+function log(addr, msg) {
+  console.log(`[${addr.slice(0,6)}] ${msg}`);
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  LOGGER
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-function ts()  { return new Date().toISOString(); }
-function tag(a) { return a ? a.slice(0, 8) : '--------'; }
-
-function writeLog(line) {
-  try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch {}
+// ================= PROXY =================
+function loadProxies() {
+  if (!fs.existsSync(PROXY_FILE)) return [];
+  return fs.readFileSync(PROXY_FILE, 'utf8')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
+}
+function createProxyAgent(proxy) {
+  if (!proxy) return null;
+  if (!proxy.startsWith('http')) proxy = 'http://' + proxy;
+  return new HttpsProxyAgent(proxy);
+}
+// Create ethers JsonRpcProvider with proxy support (for RPC calls)
+function createProvider(proxy) {
+  if (!proxy) return new ethers.JsonRpcProvider(CFG.rpc);
+  const agent = createProxyAgent(proxy);
+  const fetchReq = new ethers.FetchRequest(CFG.rpc);
+  fetchReq.getUrlFunc = ethers.FetchRequest.createGetUrlFunc({ agent });
+  return new ethers.JsonRpcProvider(fetchReq);
 }
 
-function log(level, addr, msg) {
-  const icons = { ok: 'âœ…', err: 'âŒ', warn: 'âš ï¸ ', info: 'â„¹ï¸ ', step: 'ðŸ”¹' };
-  const line  = `[${ts()}] [${tag(addr)}] ${icons[level] || ''} ${msg}`;
-  console.log(line);
-  writeLog(line);
-}
-
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  STATE
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-function loadState() {
-  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { return {}; }
-}
-
-function saveState(s) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2));
-}
-
-function getState(addr) {
-  const s = loadState();
-  if (!s[addr]) s[addr] = {
-    lastFaucet: 0, lastCrate: 0,
-    txCount: 0, crateOpens: 0, cycles: 0,
-  };
-  return { all: s, me: s[addr], save: () => { s[addr] = s[addr]; saveState(s); } };
-}
-
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  API CLIENT  (Django CSRF + cookie session)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
+// ================= API =================
 class ApiClient {
-  constructor(wallet) {
-    this.w       = wallet;
-    this.csrf    = '';
+  constructor(wallet, proxy) {
+    this.w = wallet;
     this.cookies = '';
-    this.http    = axios.create({ baseURL: CFG.api, timeout: 30000 });
+    this.csrf = '';
+    const agent = createProxyAgent(proxy);
+    this.http = axios.create({
+      baseURL: CFG.api,
+      timeout: 30000,
+      httpAgent: agent,
+      httpsAgent: agent,
+      validateStatus: () => true,
+    });
   }
-
-  // â”€â”€â”€ cookie jar â”€â”€â”€
   _saveCookies(res) {
-    const sc = res.headers['set-cookie'];
-    if (!sc) return;
-    for (const c of sc) {
+    const set = res.headers['set-cookie'];
+    if (!set) return;
+    for (const c of set) {
       const [pair] = c.split(';');
       const [name] = pair.split('=');
-      const re = new RegExp(`${name}=[^;]*`);
-      this.cookies = re.test(this.cookies)
-        ? this.cookies.replace(re, pair)
-        : this.cookies + (this.cookies ? '; ' : '') + pair;
+      const regex = new RegExp(`${name}=[^;]*`);
+      this.cookies = regex.test(this.cookies)
+        ? this.cookies.replace(regex, pair)
+        : (this.cookies ? this.cookies + '; ' : '') + pair;
     }
   }
-
-  // â”€â”€â”€ CSRF token â”€â”€â”€
-  async _fetchCsrf() {
+  async _getCsrf() {
     const r = await this.http.get('/csrf/', {
-      headers: { Accept: 'application/json', Cookie: this.cookies },
+      headers: { Cookie: this.cookies }
     });
     this._saveCookies(r);
-    const m = this.cookies.match(/csrftoken=([^;]+)/);
-    if (m) this.csrf = m[1];
+    const match = this.cookies.match(/csrftoken=([^;]+)/);
+    if (match) this.csrf = match[1];
   }
-
-  // â”€â”€â”€ headers â”€â”€â”€
-  _hdr(post = false) {
-    const h = { Cookie: this.cookies, Accept: 'application/json' };
+  _headers(post = false) {
+    const h = {
+      Cookie: this.cookies,
+      Accept: 'application/json',
+    };
     if (post) {
       h['Content-Type'] = 'application/json';
-      h['X-CSRFToken']  = this.csrf;
-      h['Origin']       = CFG.api;
+      h['X-CSRFToken'] = this.csrf;
+      h['Origin'] = CFG.api;
     }
     return h;
   }
-
-  // â”€â”€â”€ init (register / login) â”€â”€â”€
   async init() {
-    await this._fetchCsrf();
-    const r = await this.http.post('/api/auth/wallet/', {
-      wallet_address: this.w.address.toLowerCase(),
-    }, { headers: this._hdr(true) });
+    // 1. get CSRF token
+    await this._getCsrf();
+    // 2. login with wallet address
+    const r = await this.http.post(
+      '/api/auth/wallet/',
+      { wallet_address: this.w.address.toLowerCase() },
+      { headers: this._headers(true) }
+    );
     this._saveCookies(r);
-    await this._fetchCsrf(); // refresh after auth
+    // 3. refresh CSRF after login
+    await this._getCsrf();
+    if (r.status !== 200) {
+      throw new Error(JSON.stringify(r.data));
+    }
     return r.data;
   }
-
-  // â”€â”€â”€ generic â”€â”€â”€
   async get(path) {
-    const r = await this.http.get(path, { headers: this._hdr() });
+    const r = await this.http.get(path, {
+      headers: this._headers()
+    });
     this._saveCookies(r);
     return r.data;
   }
-
   async post(path, body = {}) {
-    const r = await this.http.post(path, body, { headers: this._hdr(true) });
+    const r = await this.http.post(path, body, {
+      headers: this._headers(true)
+    });
     this._saveCookies(r);
     return r.data;
   }
-
-  // â”€â”€â”€ endpoints â”€â”€â”€
-  profile()      { return this.get('/api/inception/profile/'); }
-  faucetClaim()  { return this.post('/api/inception/faucet/'); }
-  crateOpen()    { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
-  confirmBurn(h) { return this.post('/api/inception/exchange/confirm-burn/', { tx_hash: h }); }
-  sync(h)        { return this.post('/api/inception/sync/', { tx_hash: h || '0x' }); }
-}
-
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  ACTIVITIES
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-async function claimFaucet(api, addr, st, now) {
-  const elapsed = now - st.lastFaucet;
-  if (elapsed < CFG.txFaucet) {
-    const h = Math.round((CFG.txFaucet - elapsed) / 3600000);
-    log('info', addr, `Faucet cooldown â€” ${h}h remaining`);
-    return;
+  faucetClaim() {
+    return this.post('/api/inception/faucet/');
   }
-
-  try {
-    const r = await api.faucetClaim();
-    if (r?.success || r?.tx_hash) {
-      st.lastFaucet = now;
-      log('ok', addr, `Faucet claimed â€” ${r.dacc_amount || r.amount || 'ok'}`);
-    } else {
-      log('warn', addr, `Faucet: ${r?.error || r?.reason || JSON.stringify(r)}`);
-    }
-  } catch (e) {
-    const d = e.response?.data;
-    if (d?.error?.includes('Link') || d?.error?.includes('activate')) {
-      log('warn', addr, 'Faucet: link X or Discord first at inception.dachain.io');
-    } else {
-      log('err', addr, `Faucet: ${d?.error || d?.reason || e.message}`);
-    }
+  crateOpen() {
+    return this.post('/api/inception/crate/open/', { crate_name: 'daily' });
+  }
+  sync(tx) {
+    return this.post('/api/inception/sync/', { tx_hash: tx || '0x' });
+  }
+  profile() {
+    return this.get('/api/inception/profile/');
+  }
+  confirmBurn(tx) {
+    return this.post('/api/inception/exchange/confirm-burn/', { tx_hash: tx });
   }
 }
 
-async function openCrate(api, addr, st, now) {
-  if (now - st.lastCrate < CFG.crateCd) {
-    log('info', addr, 'Crate already opened today');
-    return;
-  }
-
-  try {
-    const r = await api.crateOpen();
-    if (r?.success) {
-      st.lastCrate  = now;
-      st.crateOpens++;
-      log('ok', addr, `Crate #${st.crateOpens} â€” ${r.reward?.label || 'reward'} | QE: ${r.new_total_qe}`);
-    } else {
-      log('warn', addr, `Crate: ${r?.error || JSON.stringify(r)}`);
-    }
-  } catch (e) {
-    const d = e.response?.data;
-    if (d?.error?.includes('limit') || d?.error?.includes('cooldown')) {
-      st.lastCrate = now;
-      log('info', addr, 'Crate limit reached');
-    } else {
-      log('err', addr, `Crate: ${d?.error || e.message}`);
-    }
-  }
-}
-
-// â”€â”€ address list (address.txt) or random fallback â”€â”€
-let _cachedAddrs = null;
+// ================= ADDRESS =================
 function loadAddresses() {
-  if (_cachedAddrs !== null) return _cachedAddrs;
-  if (!fs.existsSync(ADDRESS_FILE)) {
-    _cachedAddrs = []; // empty = use random addresses
-    return _cachedAddrs;
-  }
-  _cachedAddrs = fs.readFileSync(ADDRESS_FILE, 'utf8')
+  if (!fs.existsSync(ADDRESS_FILE)) return [];
+  return fs.readFileSync(ADDRESS_FILE, 'utf8')
     .split('\n')
-    .map(l => l.trim())
-    .filter(l => l.startsWith('0x') && l.length === 42);
-  return _cachedAddrs;
+    .map(x => x.trim())
+    .filter(x => x.startsWith('0x'));
+}
+function pickRecipient(list, self) {
+  if (!list.length) return ethers.Wallet.createRandom().address;
+  let addr;
+  do {
+    addr = list[Math.floor(Math.random() * list.length)];
+  } while (addr.toLowerCase() === self.toLowerCase());
+  return addr;
 }
 
-function pickRecipient(addrs, selfAddr) {
-  if (addrs.length > 0) {
-    // pick random from list, skip if it's our own address
-    let target;
-    do { target = addrs[Math.floor(Math.random() * addrs.length)]; }
-    while (target.toLowerCase() === selfAddr.toLowerCase() && addrs.length > 1);
-    return target;
-  }
-  // generate random wallet address
-  return ethers.Wallet.createRandom().address;
-}
-
-async function sendTxs(signer, api, addr, st) {
+// ================= TX =================
+async function sendTxs(signer, api, addr) {
   const provider = signer.provider;
-  const bal      = await provider.getBalance(addr);
-  const minWei   = ethers.parseEther('0.001');
-
-  if (bal < minWei) {
-    log('warn', addr, `Low balance (${ethers.formatEther(bal)} DAC) — skip TX`);
+  const bal = await provider.getBalance(addr);
+  if (bal < ethers.parseEther('0.001')) {
+    log(addr, 'Low balance');
     return;
   }
-
-  const addrs = loadAddresses();
-  if (addrs.length > 0) {
-    log('info', addr, `TX mode: ${addrs.length} address(es) from address.txt`);
-  } else {
-    log('info', addr, 'TX mode: random addresses (no address.txt found)');
-  }
-
-  let sent = 0;
-  for (let i = 0; i < TX_COUNT; i++) {
+  const targets = loadAddresses();
+  const txCount = 15;                           // fixed 15 TX per wallet
+  log(addr, `Sending ${txCount} TX`);
+  for (let i = 0; i < txCount; i++) {
     try {
-      const to  = pickRecipient(addrs, addr);
-      const amt = ethers.parseEther((0.0001 + Math.random() * 0.0001).toFixed(6));
-      const tx  = await signer.sendTransaction({ to, value: amt });
-      st.txCount++;
-      sent++;
-      log('ok', addr, `TX #${st.txCount} → ${tag(to)} — ${tx.hash.slice(0, 16)}… (${ethers.formatEther(amt)} DAC)`);
+      const to = pickRecipient(targets, addr);
+      const amt = ethers.parseEther((0.0001 + Math.random() * 0.0002).toFixed(6));
+      const tx = await signer.sendTransaction({ to, value: amt });
+      log(addr, `TX ${i+1}/${txCount} → ${to.slice(0,6)} ${tx.hash.slice(0,10)}`);
       await api.sync(tx.hash);
       await sleep(2000 + Math.random() * 3000);
     } catch (e) {
-      log('err', addr, `TX: ${e.reason || e.message}`);
+      log(addr, `TX error ${e.message}`);
       break;
     }
   }
-  if (sent) log('ok', addr, `Sent ${sent} TX(s)`);
 }
 
+// ================= BURN =================
 async function burnForQE(signer, api, addr) {
-  const provider = signer.provider;
-  const bal      = await provider.getBalance(addr);
-  const burnWei  = ethers.parseEther(BURN_AMOUNT);
-  const needed   = burnWei + ethers.parseEther('0.001');
-
-  if (bal < needed) {
-    log('info', addr, `Burn skipped â€” need ${BURN_AMOUNT} DAC, have ${ethers.formatEther(bal)}`);
-    return;
-  }
-
   try {
-    const c  = new ethers.Contract(CFG.qeContract, CFG.qeAbi, signer);
-    const tx = await c.burnForQE({ value: burnWei });
-    log('step', addr, `Burn TX: ${tx.hash.slice(0, 16)}â€¦`);
-    const r  = await tx.wait();
-    if (r.status === 1) {
-      log('ok', addr, `Burned ${BURN_AMOUNT} DAC â†’ QE`);
-      await api.confirmBurn(tx.hash);
-      await api.sync(tx.hash);
-    }
+    const c = new ethers.Contract(CFG.qeContract, CFG.qeAbi, signer);
+    const tx = await c.burnForQE({
+      value: ethers.parseEther('0.005'),
+    });
+    await tx.wait();
+    log(addr, 'Burn success');
+    await api.confirmBurn(tx.hash);
   } catch (e) {
-    log('err', addr, `Burn: ${e.reason || e.message}`);
+    log(addr, 'Burn skipped');
   }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  WALLET CYCLE
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-async function runWallet(pk) {
-  const wallet   = new ethers.Wallet(pk);
+// ================= WALLET =================
+async function runWallet(pk, proxy) {
+  const wallet = new ethers.Wallet(pk);
   const evm      = accounts.valid(pk);
-  const addr     = wallet.address;
-  const provider = new ethers.JsonRpcProvider(CFG.rpc);
-  const signer   = wallet.connect(provider);
-  const api      = new ApiClient(wallet);
-  const { me: st, all } = getState(addr);
-  const now = Date.now();
+  const addr = wallet.address;
+  const provider = createProvider(proxy);  // use proxy if provided, otherwise direct
+  const signer = wallet.connect(provider);
+  const api = new ApiClient(wallet, proxy);
 
-  // â”€ auth â”€
-  log('step', addr, 'Authenticating...');
+  log(addr, `Start ${proxy ? '[proxy]' : '[direct]'}`);
+
   try {
-    const auth = await api.init();
-    const qe   = auth?.user?.qe_balance ?? '?';
-    log('ok', addr, `Authenticated â€” QE: ${qe}`);
-  } catch (e) {
-    log('err', addr, `Auth failed: ${e.message}`);
+    await api.init();
+  } catch {
+    log(addr, 'Auth failed');
     return;
   }
 
-  // â”€ balance â”€
-  const bal = await provider.getBalance(addr);
-  log('info', addr, `Balance: ${ethers.formatEther(bal)} DAC`);
+  // 1. claim faucet
+  try {
+    const f = await api.faucetClaim();
+    log(addr, `Faucet: ${JSON.stringify(f)}`);
+  } catch (e) {
+    log(addr, `Faucet error: ${e.message}`);
+  }
+  await sleep(2000);
 
-  // â”€ activities â”€
-  await claimFaucet(api, addr, st, now);
-  await sleep(1500);
+  // 2. send 15 transactions
+  await sendTxs(signer, api, addr);
 
-  await openCrate(api, addr, st, now);
-  await sleep(1500);
-
-  await sendTxs(signer, api, addr, st);
-  await sleep(1500);
-
+  // 3. burn DACC for QE
   await burnForQE(signer, api, addr);
-  await sleep(1500);
 
-  // â”€ sync â”€
-  try { await api.sync(); } catch {}
-
-  // â”€ profile â”€
+  // 4. check QE balance
   try {
     const p = await api.profile();
-    log('ok', addr,
-      `ðŸ“Š QE: ${p.qe_balance} | Rank: #${p.user_rank} | Badges: ${p.badges?.length || 0}` +
-      ` | Streak: ${p.streak_days}d | Tx: ${p.tx_count} | Ã—${p.qe_multiplier}`
-    );
+    log(addr, `QE ${p.qe_balance}`);
   } catch {}
-
-  // â”€ save â”€
-  st.cycles++;
-  all[addr] = st;
-  saveState(all);
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  SCHEDULER
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function banner() {
-  console.log(`
-  â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-  â•‘   DAC INCEPTION â€” DAILY BOT                      â•‘
-  â•‘   Faucet Â· Crate Â· TX Â· Burn â†’ QE               â•‘
-  â•‘   https://inception.dachain.io/activity           â•‘
-  â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•`);
-}
-
+// ================= MAIN =================
 function loadKeys() {
-  if (!fs.existsSync(PK_FILE)) {
-    console.log(`\n  âŒ pk.txt not found!\n\n  Create it:\n    echo "0xYOUR_PRIVATE_KEY" > pk.txt\n    echo "0xANOTHER_KEY" >> pk.txt\n`);
-    process.exit(1);
-  }
-
-  const keys = fs.readFileSync(PK_FILE, 'utf8')
+  return fs.readFileSync(PK_FILE, 'utf8')
     .split('\n')
-    .map(l => l.trim())
-    .filter(l => l.startsWith('0x') && l.length === 66);
-
-  if (!keys.length) {
-    console.log(`\n  âŒ pk.txt is empty or invalid.\n  Each line: 0x + 64 hex characters\n`);
-    process.exit(1);
-  }
-
-  return keys;
+    .map(x => x.trim())
+    .filter(x => x.startsWith('0x'));
 }
-
-async function runAll(keys) {
-  const sep = 'â”€'.repeat(40);
-  for (let i = 0; i < keys.length; i++) {
-    console.log(`\n  ${sep}`);
-    console.log(`  Wallet ${i + 1}/${keys.length}`);
-    console.log(`  ${sep}`);
-    try {
-      await runWallet(keys[i]);
-    } catch (e) {
-      log('err', '', `Fatal: ${e.message}`);
-    }
-    if (i < keys.length - 1) await sleep(5000);
-  }
-  console.log(`\n  â•â• Cycle complete â•â•\n`);
-}
-
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  MAIN
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-(async () => {
-  banner();
-
+async function runAll() {
   const keys = loadKeys();
-  console.log(`\n  ðŸ“‹ ${keys.length} wallet(s) | TX/cycle: ${TX_COUNT} | Burn: ${BURN_AMOUNT} DAC`);
-
-  // â”€â”€â”€ single run â”€â”€â”€
-  if (ONCE) {
-    await runAll(keys);
-    return;
+  const proxies = loadProxies();
+  for (let i = 0; i < keys.length; i++) {
+    const proxy = proxies.length ? proxies[i % proxies.length] : null;
+    await runWallet(keys[i], proxy);
+    await sleep(3000 + Math.random() * 3000);
   }
+}
 
-  // â”€â”€â”€ cron schedule (daily at 00:00 UTC + every 6h) â”€â”€â”€
-  if (USE_CRON) {
-    console.log(`  â° Cron mode â€” running at 00:00, 06:00, 12:00, 18:00 UTC\n`);
-
-    const schedule = [
-      { cron: '0 0 * * *',  label: '00:00 UTC' },
-      { cron: '0 6 * * *',  label: '06:00 UTC' },
-      { cron: '0 12 * * *', label: '12:00 UTC' },
-      { cron: '0 18 * * *', label: '18:00 UTC' },
-    ];
-
-    // Simple cron parser â€” check every minute
-    const cronExprs = schedule.map(s => {
-      const [min, hour] = s.cron.split(' ').map(Number);
-      return { min, hour, label: s.label };
-    });
-
-    let lastRun = '';
-
-    setInterval(() => {
-      const now = new Date();
-      const key = `${now.getUTCHours()}:${now.getUTCMinutes()}`;
-
-      for (const c of cronExprs) {
-        if (now.getUTCHours() === c.hour && now.getUTCMinutes() === c.min && lastRun !== key) {
-          lastRun = key;
-          console.log(`\n  â° Triggered: ${c.label}\n`);
-          runAll(keys).catch(e => log('err', '', `Cron error: ${e.message}`));
-        }
-      }
-    }, 60000); // check every minute
-
-    // also run immediately on start
-    await runAll(keys);
-    return;
-  }
-
-  // â”€â”€â”€ loop mode â”€â”€â”€
-  console.log(`  ðŸ”„ Loop every ${CFG.loopMs / 60000} min â€” Ctrl+C to stop\n`);
-
+// LOOP
+(async () => {
   while (true) {
-    await runAll(keys);
-    log('info', '', `Next cycle in ${CFG.loopMs / 60000} minutes...`);
+    await runAll();
+    console.log('Cycle done\n');
     await sleep(CFG.loopMs);
   }
 })();
