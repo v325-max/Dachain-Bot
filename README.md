@@ -1,5 +1,4 @@
 # DAC Inception — Daily Testnet Bot
-
 Automated daily activities for [DAC Inception](https://inception.dachain.io/activity) testnet.
 
 **Chain:** DAC Quantum Chain (ID: 21894)
@@ -9,17 +8,16 @@ Automated daily activities for [DAC Inception](https://inception.dachain.io/acti
 ---
 
 ## Activities
-
 | # | Action | Description |
 |---|--------|-------------|
 | 1 | 🚰 Faucet | Claim free DACC (requires X or Discord linked) |
-| 2 | 📦 Crate | Open daily Quantum Crate → earn QE |
-| 3 | 💸 TX | Transfer to `address.txt` list or random addresses |
-| 4 | 🔥 Burn | Burn DACC → Quantum Energy (QE) |
-| 5 | 🔄 Sync | Sync all activity to API |
+| 2 | 💸 TX | Transfer 15x to `address.txt` list or random addresses |
+| 3 | 🔥 Burn | Burn DACC → Quantum Energy (QE) |
+| 4 | 🔄 Sync | Sync all activity to API |
+
+---
 
 ## Badges (Auto-earned)
-
 | Badge | Requirement | QE Reward |
 |-------|------------|-----------|
 | Sign In | First login | 25 |
@@ -38,9 +36,8 @@ Automated daily activities for [DAC Inception](https://inception.dachain.io/acti
 ## Setup
 
 ### 1. Prerequisites
-
 ```bash
-# clone repo
+# Clone repo
 git clone https://github.com/v325-max/Dachain-Bot.git
 cd Dachain-Bot
 
@@ -49,9 +46,7 @@ npm install
 ```
 
 ### 2. Wallet Keys
-
 Create `pk.txt` in the project directory — one private key per line:
-
 ```bash
 # Single wallet
 echo "0xYOUR_PRIVATE_KEY_HERE" > pk.txt
@@ -61,23 +56,36 @@ echo "0xWALLET_1_KEY" > pk.txt
 echo "0xWALLET_2_KEY" >> pk.txt
 echo "0xWALLET_3_KEY" >> pk.txt
 ```
-
 > ⚠️ Never share or commit `pk.txt`!
 
 ### 3. Address List (Optional)
-
 Create `address.txt` to send transactions to specific addresses. One address per line:
-
 ```bash
-# Create address list
 echo "0xRECIPIENT_1_ADDRESS" > address.txt
 echo "0xRECIPIENT_2_ADDRESS" >> address.txt
 ```
-
 > If `address.txt` doesn't exist, the bot will generate random addresses automatically.
 
-### 4. Prerequisites per Wallet
+### 4. Proxy (Optional)
+Create `proxy.txt` to route all traffic (API + RPC) through a proxy. One proxy per line:
+```bash
+echo "host:port" > proxy.txt
+echo "user:pass@host:port" >> proxy.txt
+echo "http://user:pass@host:port" >> proxy.txt
+```
 
+Supported formats:
+```
+host:port
+user:pass@host:port
+http://user:pass@host:port
+socks5://host:port
+```
+
+> If `proxy.txt` doesn't exist or is empty, all wallets run **direct** without error.
+> Proxies are rotated per wallet: wallet 1 → proxy 1, wallet 2 → proxy 2, dst.
+
+### 5. Prerequisites per Wallet
 Each wallet must have:
 - ✅ Connected at [inception.dachain.io](https://inception.dachain.io) at least once
 - ✅ Linked Twitter (X) or Discord for faucet
@@ -104,17 +112,15 @@ node bot.js --cron
 
 ### Custom Options
 ```bash
-node bot.js --tx 5              # 5 transfers per cycle
-node bot.js --burn 0.01         # burn 0.01 DAC per cycle
-node bot.js --tx 10 --burn 0.02 # combine options
+node bot.js --tx 15             # 15 transfers per cycle (default)
+node bot.js --burn 0.005        # burn 0.005 DAC per cycle (default)
+node bot.js --tx 15 --burn 0.01 # combine options
 ```
 
 ---
 
 ## Systemd Service (Linux)
-
 Run as background service with auto-restart:
-
 ```bash
 sudo tee /etc/systemd/system/dachain-bot.service << 'EOF'
 [Unit]
@@ -142,7 +148,6 @@ sudo journalctl -u dachain-bot -f
 ```
 
 ## Crontab (Alternative)
-
 ```bash
 # Edit crontab
 crontab -e
@@ -154,15 +159,15 @@ crontab -e
 ---
 
 ## Files
-
-| File | Description |
-|------|-------------|
-| `bot.js` | Main bot script |
-| `pk.txt` | Private keys (one per line) |
-| `address.txt` | Recipient addresses (one per line, optional) |
-| `state.json` | Runtime state (auto-generated) |
-| `bot.log` | Activity log (auto-generated) |
-| `package.json` | Project config |
+| File | Required | Description |
+|------|----------|-------------|
+| `bot.js` | ✅ | Main bot script |
+| `pk.txt` | ✅ | Private keys (one per line) |
+| `address.txt` | ❌ | Recipient addresses (optional, one per line) |
+| `proxy.txt` | ❌ | Proxy list (optional, one per line) |
+| `state.json` | — | Runtime state (auto-generated) |
+| `bot.log` | — | Activity log (auto-generated) |
+| `package.json` | ✅ | Project config |
 
 ---
 
@@ -178,21 +183,28 @@ crontab -e
 │ address.txt │────▶│  DAC Chain   │        │  Inception    │
 │ (recipients)│     │  (RPC)       │        │  Dashboard    │
 └─────────────┘     └──────────────┘        └───────────────┘
+        ▲
+┌───────┴─────┐
+│  proxy.txt  │  (optional — routes API + RPC traffic)
+└─────────────┘
 ```
 
-**Auth flow:**
+**Flow per wallet:**
 1. `GET /csrf/` → get CSRF cookie
 2. `POST /api/auth/wallet/` → register/login wallet
 3. `POST /api/inception/faucet/` → claim DACC
-4. `POST /api/inception/crate/open/` → open daily crate
-5. `POST tx` → transfer to address.txt or random address
-6. `POST burnForQE()` → burn DACC on-chain
-7. `POST /api/inception/sync/` → sync activity
+4. `POST tx × 15` → transfer to address.txt or random addresses
+5. `POST burnForQE()` → burn 0.005 DACC on-chain
+6. `POST /api/inception/sync/` → sync activity
+7. `GET /api/inception/profile/` → check QE balance
+
+**Proxy flow:**
+- If `proxy.txt` exists → API calls (axios) + RPC calls (ethers) both route through proxy
+- If no `proxy.txt` → direct connection, no error
 
 ---
 
 ## Contracts
-
 | Contract | Address |
 |----------|---------|
 | QE Exchange | `0x3691A78bE270dB1f3b1a86177A8f23F89A8Cef24` |
@@ -201,7 +213,6 @@ crontab -e
 ---
 
 ## Troubleshooting
-
 | Problem | Solution |
 |---------|----------|
 | `Faucet: link X or Discord` | Link social at [inception.dachain.io](https://inception.dachain.io) |
@@ -209,9 +220,10 @@ crontab -e
 | `CSRF verification failed` | Cookie expired — restart bot |
 | `Auth failed` | Check private key format in `pk.txt` |
 | `Crate limit reached` | Already opened today — wait 24h |
+| `TX error: insufficient funds` | Top up wallet or reduce burn amount |
+| `Proxy error / connection refused` | Check proxy format in `proxy.txt` |
 
 ---
 
 ## License
-
 MIT
