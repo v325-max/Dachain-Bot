@@ -1,26 +1,39 @@
 # DAC Inception — Daily Testnet Bot
 Automated daily activities for [DAC Inception](https://inception.dachain.io/activity) testnet.
 
-## Update tx count and proxy (rpc include)
 **Chain:** DAC Quantum Chain (ID: 21894)
 **RPC:** `https://rpctest.dachain.tech`
 **Explorer:** `https://exptest.dachain.tech`
 
 ---
 
-## Activities
-| # | Action | Description |
-|---|--------|-------------|
-| 1 | 🚰 Faucet | Claim free DACC (requires X or Discord linked) |
-| 2 | 💸 TX | Transfer 15x to `address.txt` list or random addresses |
-| 3 | 🔥 Burn | Burn DACC → Quantum Energy (QE) |
-| 4 | 🔄 Sync | Sync all activity to API |
+## Recent Updates
+
+| Version | Change |
+|---------|--------|
+| **v1.3** | Added retry logic for all API calls (axios) — HTTP 429/5xx + network errors |
+| **v1.2** | Added badge auto-mint — checks & mints all claimable badges each cycle |
+| **v1.1** | Added retry logic for RPC errors — auto-retries up to 3x with backoff |
+| **v1.0** | Proxy support for API + RPC traffic; TX count fixed at 15x per wallet |
 
 ---
 
-## Badges (Auto-earned)
+## Activities
+
+| # | Action | Description |
+|---|--------|-------------|
+| 1 | 🚰 Faucet | Claim free DACC (requires X or Discord linked) |
+| 2 | 💸 TX | Transfer **15x** to `address.txt` list or random addresses |
+| 3 | 🔥 Burn | Burn DACC → Quantum Energy (QE) |
+| 4 | 🏅 Badge | Auto-mint all claimable badges (API + on-chain) |
+| 5 | 🔄 Sync | Sync all activity to API |
+
+---
+
+## Badges (Auto-earned & Auto-minted)
+
 | Badge | Requirement | QE Reward |
-|-------|------------|-----------|
+|-------|-------------|-----------|
 | Sign In | First login | 25 |
 | First Crate | Open 1 crate | 25 |
 | First Transaction | Send 1 tx | 50 |
@@ -31,6 +44,8 @@ Automated daily activities for [DAC Inception](https://inception.dachain.io/acti
 | Regular | Claim faucet 10x | 50 |
 | Daily Streak | 3/7/14/21/30 days | 50–1000 |
 | QE milestones | 500+ total QE | 50–5000 |
+
+> The bot automatically detects and mints all claimable badges every cycle via API + on-chain Rank Badge contract.
 
 ---
 
@@ -65,7 +80,7 @@ Create `address.txt` to send transactions to specific addresses. One address per
 echo "0xRECIPIENT_1_ADDRESS" > address.txt
 echo "0xRECIPIENT_2_ADDRESS" >> address.txt
 ```
-> If `address.txt` doesn't exist, the bot will generate random addresses automatically.
+> If `address.txt` doesn't exist, the bot generates random addresses automatically.
 
 ### 4. Proxy (Optional)
 Create `proxy.txt` to route all traffic (API + RPC) through a proxy. One proxy per line:
@@ -84,7 +99,7 @@ socks5://host:port
 ```
 
 > If `proxy.txt` doesn't exist or is empty, all wallets run **direct** without error.
-> Proxies are rotated per wallet: wallet 1 → proxy 1, wallet 2 → proxy 2, dst.
+> Proxies are rotated per wallet: wallet 1 → proxy 1, wallet 2 → proxy 2, and so on.
 
 ### 5. Prerequisites per Wallet
 Each wallet must have:
@@ -160,6 +175,7 @@ crontab -e
 ---
 
 ## Files
+
 | File | Required | Description |
 |------|----------|-------------|
 | `bot.js` | ✅ | Main bot script |
@@ -197,15 +213,28 @@ crontab -e
 4. `POST tx × 15` → transfer to address.txt or random addresses
 5. `POST burnForQE()` → burn 0.005 DACC on-chain
 6. `POST /api/inception/sync/` → sync activity
-7. `GET /api/inception/profile/` → check QE balance
+7. `GET /api/inception/badge/` → fetch claimable badges
+8. `POST /api/inception/badge/mint/` + on-chain mint → auto-mint each badge
+9. `GET /api/inception/profile/` → check QE balance
 
-**Proxy flow:**
+**Retry logic:**
+
+All RPC and API calls are automatically retried up to **3 times** with exponential backoff (3s → 6s → 9s).
+
+| Layer | Retried errors |
+|-------|----------------|
+| RPC (ethers) | `NETWORK_ERROR`, `TIMEOUT`, `SERVER_ERROR`, `CONNECTION_REFUSED` |
+| API network | `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND` |
+| API HTTP | `429` (rate limit), `500`, `502`, `503`, `504` |
+
+**Proxy routing:**
 - If `proxy.txt` exists → API calls (axios) + RPC calls (ethers) both route through proxy
 - If no `proxy.txt` → direct connection, no error
 
 ---
 
 ## Contracts
+
 | Contract | Address |
 |----------|---------|
 | QE Exchange | `0x3691A78bE270dB1f3b1a86177A8f23F89A8Cef24` |
@@ -214,6 +243,7 @@ crontab -e
 ---
 
 ## Troubleshooting
+
 | Problem | Solution |
 |---------|----------|
 | `Faucet: link X or Discord` | Link social at [inception.dachain.io](https://inception.dachain.io) |
@@ -223,6 +253,8 @@ crontab -e
 | `Crate limit reached` | Already opened today — wait 24h |
 | `TX error: insufficient funds` | Top up wallet or reduce burn amount |
 | `Proxy error / connection refused` | Check proxy format in `proxy.txt` |
+| `Badge on-chain mint skipped` | Badge not yet earned or already minted |
+| `API retry exhausted` | Server down — bot will retry next cycle |
 
 ---
 
