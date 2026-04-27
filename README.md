@@ -18,6 +18,10 @@ Automated daily activities for [DAC Inception](https://inception.dachain.io/acti
 
 ---
 
+## Next Update
+
+Auto Reff
+
 ## Activities
 
 | # | Action | Description |
